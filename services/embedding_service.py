@@ -36,9 +36,9 @@ index = pc.Index(INDEX_NAME)
 
 def embed_text(text: str) -> list[float]:
     resp = openai.embeddings.create(input=text, model="text-embedding-ada-002")
-    return resp["data"][0]["embedding"]
+    return resp.data[0].embedding
 
 def semantic_search(query: str, top_k: int = 5):
     vec = embed_text(query)
-    resp = index.query(vec, top_k=top_k, include_metadata=True)
+    resp = index.query(vector=vec, top_k=top_k, include_metadata=True)
     return resp["matches"]
