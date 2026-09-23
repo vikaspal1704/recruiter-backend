@@ -1,21 +1,23 @@
 # routes/background.py
-from fastapi import APIRouter, Depends, HTTPException
-from supabase_client import supabase
+"""STUB: background checks always return "passed" with a placeholder report URL."""
+
+from fastapi import APIRouter, HTTPException
+
+from schemas.background import BackgroundResult
 from services.background_check_service import run_background_check
-from pydantic import BaseModel
+from supabase_client import fetch_one, supabase
 
 router = APIRouter(prefix="/background", tags=["background"])
 
-class BackgroundResult(BaseModel):
-    status: str
-    report_url: str
 
-@router.post("/run/{candidate_id}", response_model=BackgroundResult)
-async def run_check(candidate_id: str, user=Depends(get_current_user)):
+@router.post(
+    "/run/{candidate_id}",
+    response_model=BackgroundResult,
+    description="Stub: no real vendor is called; always returns a passed placeholder report.",
+)
+async def run_check(candidate_id: str):
     # 1. Verify candidate exists
-    resp = supabase.from_("candidate_profiles").select("*").eq("id", candidate_id).single().execute()
-    data, error = resp.data, resp.error
-    if error or not data:
+    if not fetch_one(supabase, "candidate_profiles", "id", candidate_id):
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     # 2. Insert “pending” row in background_checks
@@ -23,8 +25,6 @@ async def run_check(candidate_id: str, user=Depends(get_current_user)):
         "candidate_id": candidate_id,
         "status": "pending"
     }).execute()
-    if ins.error:
-        raise HTTPException(status_code=500, detail=ins.error.message)
     # 3. Call stub
     result = run_background_check(candidate_id)
     supabase.from_("background_checks")\
