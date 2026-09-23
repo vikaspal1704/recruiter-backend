@@ -7,9 +7,6 @@ from supabase import create_client, Client
 # Load environment variables from .env
 load_dotenv()
 
-print("→ DEBUG: SUPABASE_URL =", os.getenv("SUPABASE_URL"))
-print("→ DEBUG: SUPABASE_SERVICE_KEY =", os.getenv("SUPABASE_SERVICE_KEY")[:10] + "...")
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 

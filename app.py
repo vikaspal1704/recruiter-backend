@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load .env
 load_dotenv()
 
-app = FastAPI(title="Lovable AI MVP Backend")
+app = FastAPI(title=os.getenv("APP_TITLE", "Recruiter Talent Search API"))
 
 # ---- Auth Middleware (unused when bypassing, but kept if you re-enable auth) ----
 async def get_current_user(authorization: str = Header(...)):
