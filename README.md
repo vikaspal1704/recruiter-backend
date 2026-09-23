@@ -2,7 +2,7 @@
 
 **Hire-ready talent-search API** — resume ingest + parse, embedding search (Pinecone), optional outreach email.
 
-> **Status:** MVP / portfolio polish in progress. Core upload → parse → search path works; auth is currently bypassed; several routers exist as files but are not wired into `app.py`. Treat this as a working prototype being hardened for recruiter demos and SWE portfolio review — not production SaaS.
+> **Status:** MVP portfolio backend, hardened. Upload → parse → search works end to end; every route except `/healthcheck` requires auth (API key or Supabase Bearer); outreach, profile and a background-check **stub** are wired; tests run fully mocked in CI with a Docker build. It is still an MVP, not a full ATS or production SaaS.
 
 **Author:** Vikas Pal · fintech SWE portfolio / job-hunt tooling  
 **Repo:** https://github.com/vikaspal1704/recruiter-backend  
@@ -12,18 +12,28 @@
 
 ## What it does
 
-| Capability | Endpoint (today) | Notes |
+| Capability | Endpoint | Notes |
 |---|---|---|
-| Health | `GET /healthcheck` | Wired |
-| Resume upload (PDF → Supabase Storage + `resumes` row) | `POST /resume/upload` | Wired; uses dummy `user_id` |
-| Resume parse (OpenAI JSON extract → `candidate_profiles` + Pinecone upsert) | `POST /resume/parse/{resume_id}` | Wired |
-| Semantic candidate search | `GET /search/?q=…&k=5` | Wired (Pinecone + Supabase) |
-| Outreach email (SendGrid) | `POST /outreach/` | Code exists; **not included** in `app.py` |
-| Profile CRUD | `GET/PUT /profile/` | Code exists; **not included** |
-| Background check stub | `POST /background/run/{candidate_id}` | Code exists; **not included** |
-| Auth / analytics routers | `routes/auth.py`, `routes/analytics.py` | **Empty files** |
+| Health | `GET /healthcheck` | Public |
+| Resume upload (PDF → Supabase Storage + `resumes` row) | `POST /resume/upload` | Protected; `user_id` = auth principal; 400 non-PDF, 413 too large |
+| Resume parse (OpenAI JSON extract → `candidate_profiles` + Pinecone upsert) | `POST /resume/parse/{resume_id}` | Protected; idempotent once parsed |
+| Semantic candidate search | `GET /search/?q=…&k=5` | Protected (Pinecone + Supabase) |
+| Outreach email (SendGrid) | `POST /outreach/` | Protected; logs to `outreach_logs` |
+| Profile get / update | `GET` / `PUT /profile/` | Protected; per authenticated user |
+| Background check | `POST /background/run/{candidate_id}` | Protected; **stub** — always “passed”, no vendor called |
 
 Stack: **FastAPI · Supabase · Pinecone · OpenAI · SendGrid · PyPDF2 · pytest** (listed in `requirements.txt`).
+
+### Auth
+
+| `AUTH_MODE` | Accepts |
+|---|---|
+| `api_key_or_bearer` (default) | `X-API-Key: <API_KEY>` **or** `Authorization: Bearer <Supabase access token>` |
+| `api_key` | `X-API-Key` only |
+| `bearer` | Supabase Bearer only |
+| `off` | Anything — local emergency only; refused when `APP_ENV=production` |
+
+Requests authenticated by API key act as the system user `API_KEY_USER_ID` (default `00000000-0000-0000-0000-000000000000`, matching the rows the MVP already wrote). Bearer requests act as the Supabase user. Missing or invalid credentials → `401`.
 
 ---
 
@@ -37,9 +47,27 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 curl http://localhost:8000/healthcheck
 ```
 
-OpenAPI docs: `http://localhost:8000/docs`
+OpenAPI docs: `http://localhost:8000/docs` (disabled when `APP_ENV=production`).
 
-Docker / CI targets are specified in [docs/TRD.md](docs/TRD.md) and phased in [docs/AGENT_BRIEF.md](docs/AGENT_BRIEF.md). Agents should add them if missing.
+### Docker
+
+```bash
+cp .env.example .env   # fill in
+docker compose up --build
+# or: docker build -t recruiter-backend . && docker run --env-file .env -p 8000:8000 recruiter-backend
+```
+
+### Tests
+
+```bash
+pytest -q
+```
+
+Tests need no network or real keys: `tests/conftest.py` sets dummy env vars and swaps Supabase and Pinecone for in-memory fakes (`tests/fakes.py`); OpenAI and SendGrid calls are monkeypatched. CI (`.github/workflows/ci.yml`) runs the suite, a secret-hygiene check, and a Docker build + `/healthcheck` smoke test.
+
+### Configuration
+
+All settings come from the environment; see [`.env.example`](.env.example). Required for the core path: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `OPENAI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_ENVIRONMENT`, and `API_KEY` (or Bearer auth). Outreach additionally needs `SENDGRID_API_KEY` and `SENDGRID_FROM_EMAIL`. External clients are created lazily on first use, so a missing key fails that request with a clear error rather than crashing startup.
 
 ---
 
@@ -61,19 +89,33 @@ Docker / CI targets are specified in [docs/TRD.md](docs/TRD.md) and phased in [d
 
 ## Security notes (honest)
 
-- Auth helpers exist (`dependencies.get_current_user`, duplicate in `app.py`) but **resume/search routes do not require auth**.
-- CORS is `allow_origins=["*"]` — tighten for any public deploy.
-- `supabase_client.py` currently **prints a prefix of `SUPABASE_SERVICE_KEY` at import** — remove that in hygiene phase.
-- Never commit `.env`, `__pycache__/`, credentials, or large unrelated PDFs (`Java.pdf`, `React.pdf` are junk and should be removed).
+- Auth is enforced on every route except `/healthcheck` (single implementation in `dependencies.py`); API keys are compared in constant time.
+- CORS origins come from `CORS_ALLOW_ORIGINS`; `*` is refused when `APP_ENV=production`.
+- The server uses the Supabase **service-role** key (bypasses row-level security): keep it server-side only.
+- No secrets are logged. If keys were ever printed or committed by the earlier MVP, rotate them.
+- Uploads are limited to PDFs up to `MAX_UPLOAD_MB` (default 10); stored filenames are stripped of any path.
 
 ---
 
 ## Demo flow (happy path)
 
-1. `POST /resume/upload` with a PDF → `{ "resume_id": "…" }`
-2. `POST /resume/parse/{resume_id}` → candidate profile JSON + Pinecone vector
-3. `GET /search/?q=python%20fastapi&k=5` → ranked candidates
-4. (After wiring) `POST /outreach/` with API key / Bearer → SendGrid email + log row
+With a server running against real services and `.env` filled in:
+
+```bash
+scripts/demo.sh                      # uses tests/fixtures/sample_resume.pdf
+scripts/demo.sh path/to/resume.pdf   # or your own PDF
+DEMO_OUTREACH=1 scripts/demo.sh      # also emails the parsed candidate address (use an inbox you control)
+```
+
+The script:
+
+1. `GET /healthcheck`
+2. `POST /resume/upload` with the PDF → `{ "resume_id": "…" }`
+3. `POST /resume/parse/{resume_id}` → candidate profile JSON + Pinecone vector
+4. `GET /search/?q=python%20fastapi&k=5` → ranked candidates
+5. (optional) `POST /outreach/` → SendGrid email + `outreach_logs` row
+
+It exits with a clear error if `.env` is missing. It authenticates with `API_KEY` from `.env`, so `AUTH_MODE` must be `api_key` or `api_key_or_bearer`.
 
 ---
 

@@ -79,7 +79,7 @@ services/qa_generator.py, analytics_service.py → unused by routes
 
 | Concern | Target |
 |---|---|
-| Config | `pydantic-settings` or env via dotenv; `.env.example` contract |
+| Config | `config.py` (env via dotenv, validated at startup); `.env.example` contract |
 | Auth | `dependencies.require_auth` on protected routers |
 | Schemas | Shared under `schemas/` |
 | Tests | Mock Supabase / OpenAI / Pinecone / SendGrid |
@@ -97,9 +97,9 @@ Client + Auth
   → POST /resume/upload (PDF multipart)
   → Supabase Storage put + resumes insert (user_id = auth principal)
   → POST /resume/parse/{resume_id}
-  → download PDF → PyPDF2 text → OpenAI structured JSON
-  → candidate_profiles insert → resumes.parsed=true
-  → embed_text → Pinecone upsert
+  → download PDF → PyPDF2 text → OpenAI structured JSON → embed_text
+  → candidate_profiles insert → Pinecone upsert → resumes.parsed=true
+    (embedding runs before any write, so an OpenAI failure leaves the resume unparsed)
 ```
 
 ### 3.2 Search
@@ -145,6 +145,6 @@ Client + Auth
 
 ## 6. Diagram legend
 
-- **Wired today:** resume, search, healthcheck  
-- **Phase 2:** auth enforcement + outreach/profile  
-- **Phase 3–4:** tests + demo automation
+- **Done:** resume, search, healthcheck, auth enforcement, outreach, profile, background stub (Phase 1–2)
+- **Done:** mocked pytest suite, Docker + CI, `scripts/demo.sh` (Phase 3–4)
+- External clients (Supabase, OpenAI, Pinecone, PostHog) are created lazily on first use (`lazy.py`), so importing the app makes no network calls.

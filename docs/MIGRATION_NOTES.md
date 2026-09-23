@@ -153,3 +153,31 @@ After migration, a recruiter should see:
 - Documented upload → parse → search (+ optional outreach)  
 
 …while recognizing it remains an **MVP portfolio backend**, not a full ATS.
+
+---
+
+## 10. Migration log (what was actually done)
+
+| Phase | Change | Notes |
+|---|---|---|
+| 1 | Purged `__pycache__/`, `Java.pdf`, `React.pdf`; expanded `.gitignore`; added `.env.example` | A tiny generated `tests/fixtures/sample_resume.pdf` (<1 KB) replaces them for tests and the demo |
+| 1 | Removed DEBUG prints of `SUPABASE_URL` / key prefix | **Rotate the service key** if old logs may have captured it |
+| 1 | Renamed FastAPI title → `Recruiter Talent Search API` (`APP_TITLE` overrides) | |
+| 1 | `Dockerfile` (python:3.12-slim, non-root, healthcheck), `.dockerignore`, `docker-compose.yml`, CI | |
+| 2 | Auth consolidated in `dependencies.require_auth` (`get_current_user` is an alias); duplicate removed from `app.py` | `AUTH_MODE` = `api_key` / `bearer` / `api_key_or_bearer` / `off` |
+| 2 | Every router mounted with `Depends(require_auth)`; `/healthcheck` public; `/docs` off in production | |
+| 2 | `DUMMY_USER_ID` replaced by the principal; API-key principal = `API_KEY_USER_ID` (defaults to the old dummy UUID so existing rows keep their owner) | |
+| 2 | Wired `outreach`, `profile`, `background` (stub); fixed missing imports and the triplicate import | |
+| 2 | Models moved from route files into `schemas/*`; `ProfileUpdate` fields now default to `None` so partial `PUT` works (previously every field was required) | |
+| 2 | **Deleted** empty `routes/auth.py` and `routes/analytics.py` | Auth is a dependency, not a router; analytics stays a service helper. No public paths were ever exposed by them |
+| 2 | CORS origins from `CORS_ALLOW_ORIGINS`; `*` refused in production; credentials disabled for `*` | |
+| 2 | Lazy Supabase / OpenAI / Pinecone clients (`lazy.py`, `openai_client.py`); Pinecone index created on first use, not import; index/model names from env | Fixes defect §7.4 |
+| 2 | `SENDGRID_FROM_EMAIL` read from env | Fixes defect §7.5 |
+
+### Behavior fixes found while migrating
+
+- **supabase-py 2.15 / postgrest 1.0 compatibility:** responses have no `.error` attribute and `.single()` raises when no row matches. The old code crashed (`AttributeError`) on search hydration, outreach, profile and background, and `get_user(...).get(...)` never worked. Replaced with `supabase_client.fetch_one()` (`limit(1)`, `None` when missing) and `UserResponse.user` for Bearer auth. Fixes defect §7.7.
+- **Parse ordering:** embedding now happens before any DB write and `resumes.parsed` is set last, so an OpenAI/Pinecone failure no longer leaves a resume marked parsed with no vector. A resume marked parsed whose profile row is missing is parsed again instead of returning `null`.
+- **Upload validation:** non-PDF → `400`, over `MAX_UPLOAD_MB` → `413`, filenames stripped of paths.
+- **`search`:** `q` must be non-empty and `k` is limited to 1–100 (`422` otherwise).
+- **`PUT /profile/`** returns `404` when no profile row exists yet, instead of an `IndexError` `500`.
