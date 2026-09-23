@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Dummy values only: every external service is mocked in tests.
+  APP_ENV: test
+  AUTH_MODE: api_key
+  API_KEY: test-api-key
+  SUPABASE_URL: https://example.supabase.co
+  SUPABASE_SERVICE_KEY: test-service-key
+  OPENAI_API_KEY: test-openai
+  PINECONE_API_KEY: test-pinecone
+  PINECONE_ENVIRONMENT: us-east-1
+  PINECONE_INDEX_NAME: candidates-mvp
+  SENDGRID_API_KEY: test-sendgrid
+  SENDGRID_FROM_EMAIL: noreply@example.com
+  CORS_ALLOW_ORIGINS: http://localhost:3000
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Secret hygiene
+        run: |
+          if git ls-files | grep -Eq '(^|/)\.env$'; then
+            echo "::error::.env is tracked by git"; exit 1
+          fi
+          if git ls-files | grep -Eq '__pycache__|\.pyc$'; then
+            echo "::error::Python bytecode is tracked by git"; exit 1
+          fi
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Test
+        run: pytest -q
+      - name: Demo script syntax
+        run: bash -n scripts/demo.sh
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t recruiter-backend:ci .
+      - name: Smoke test /healthcheck
+        run: |
+          docker run -d --name api -p 8000:8000 \
+            -e APP_ENV -e AUTH_MODE -e API_KEY -e CORS_ALLOW_ORIGINS \
+            recruiter-backend:ci
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/healthcheck && exit 0
+            sleep 1
+          done
+          docker logs api
+          exit 1
