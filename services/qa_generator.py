@@ -1,7 +1,7 @@
 # services/qa_generator.py
-from openai import OpenAI
-import os
-openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+import json
+
+from openai_client import CHAT_MODEL, openai
 
 def generate_pre_screen_questions(skills: list[str], years: float):
     prompt = f"""
@@ -15,12 +15,11 @@ def generate_pre_screen_questions(skills: list[str], years: float):
     }}
     """
     resp = openai.chat.completions.create(
-        model="gpt-4",
+        model=CHAT_MODEL,
         messages=[
            {"role": "system", "content": "You are a JSON‐only question generator."},
            {"role": "user", "content": prompt}
         ],
         temperature=0.7
     )
-    import json
     return json.loads(resp.choices[0].message.content)

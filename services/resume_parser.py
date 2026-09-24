@@ -1,31 +1,28 @@
 # services/resume_parser.py
 
-import tempfile, requests, os, json
+import io
+import json
+
+import requests
 from PyPDF2 import PdfReader
-from openai import OpenAI
-from dotenv import load_dotenv
 
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("Missing OPENAI_API_KEY in .env")
+from openai_client import CHAT_MODEL, openai
 
-openai = OpenAI(api_key=OPENAI_API_KEY)
+DOWNLOAD_TIMEOUT_SEC = 30
+
 
 def extract_text_from_pdf(url: str) -> str:
     # 1) Download the PDF bytes
-    r = requests.get(url)
-    tf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    tf.write(r.content)
-    tf.close()
+    r = requests.get(url, timeout=DOWNLOAD_TIMEOUT_SEC)
+    r.raise_for_status()
 
     # 2) Extract text page by page
-    reader = PdfReader(tf.name)
+    reader = PdfReader(io.BytesIO(r.content))
     text = ""
     for page in reader.pages:
         text += page.extract_text() or ""
-    os.unlink(tf.name)
     return text
+
 
 def parse_resume_text(raw_text: str) -> dict:
     prompt = f"""
@@ -43,7 +40,7 @@ Resume Text:
 \"\"\"{raw_text}\"\"\"
 """
     res = openai.chat.completions.create(
-        model="gpt-4",
+        model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": "You are a JSON responder for parsing resumes."},
             {"role": "user", "content": prompt}

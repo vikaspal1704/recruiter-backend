@@ -1,38 +1,31 @@
 # routes/profile.py
 from fastapi import APIRouter, Depends, HTTPException
-from supabase_client import supabase
-from supabase_client import supabase
-from supabase_client import supabase
-from pydantic import BaseModel
+
+from dependencies import get_current_user
+from schemas.profile import ProfileUpdate
+from supabase_client import fetch_one, supabase
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
-class ProfileUpdate(BaseModel):
-    full_name: str | None
-    current_title: str | None
-    location: str | None
 
 @router.get("/", response_model=dict)
-async def get_profile(user=Depends(get_current_user)):
+async def get_profile(user: dict = Depends(get_current_user)):
     user_id = user["id"]
-    resp = supabase.from_("profiles").select("*").eq("id", user_id).single().execute()
-    data, error = resp.data, resp.error
-    if error and hasattr(error, "code") and error.code == "PGRST116":
+    data = fetch_one(supabase, "profiles", "id", user_id)
+    if data is None:
         # no row → create blank
-        insert = supabase.from_("profiles").insert({"id": user_id, "email": user["email"]}).execute()
+        insert = supabase.from_("profiles").insert({"id": user_id, "email": user.get("email")}).execute()
         data = insert.data[0]
-    elif error:
-        raise HTTPException(status_code=500, detail=error.message)
     return data
 
+
 @router.put("/", response_model=dict)
-async def update_profile(payload: ProfileUpdate, user=Depends(get_current_user)):
+async def update_profile(payload: ProfileUpdate, user: dict = Depends(get_current_user)):
     user_id = user["id"]
-    updates = payload.dict(exclude_unset=True)
+    updates = payload.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided")
     resp = supabase.from_("profiles").update(updates).eq("id", user_id).execute()
-    data, error = resp.data, resp.error
-    if error:
-        raise HTTPException(status_code=500, detail=error.message)
-    return data[0]
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return resp.data[0]

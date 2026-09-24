@@ -16,7 +16,7 @@
 | `X-API-Key: <API_KEY>` | Demo / simple clients |
 | `Authorization: Bearer <supabase_access_token>` | Supabase Auth path |
 
-Health is public. All routes below marked **Protected** require one valid mechanism (per `AUTH_MODE`).
+Health is public. All routes below marked **Protected** require one valid mechanism (per `AUTH_MODE`); missing/invalid → `401` `{"detail": "Missing or invalid credentials"}`. API-key requests act as `API_KEY_USER_ID`; Bearer requests act as the Supabase user.
 
 ### Error shape (target)
 
@@ -33,7 +33,7 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 
 ---
 
-## 1. Health — wired today
+## 1. Health
 
 ### `GET /healthcheck`
 
@@ -44,7 +44,7 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 { "status": "ok" }
 ```
 
-- **Optional SHOULD extension** (do not break existing clients):
+- **Implemented** (additive; existing clients reading `status` are unaffected):
 
 ```json
 { "status": "ok", "version": "0.1.0" }
@@ -52,14 +52,13 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 
 ---
 
-## 2. Resume — wired today (`routes/resume.py`, prefix `/resume`)
+## 2. Resume (`routes/resume.py`, prefix `/resume`)
 
 ### `POST /resume/upload` — Protected
 
 - **Body:** multipart file (`file`), PDF expected  
-- **Behavior (current):** upload to Supabase Storage bucket `resumes` at `{user_id}/{filename}`, insert `resumes` row, return id  
-- **Today’s quirk:** `user_id` hardcoded `DUMMY_USER_ID = 00000000-0000-0000-0000-000000000000`  
-- **Target:** use authenticated user id (or documented system UUID for API-key mode)
+- **Behavior:** upload to Supabase Storage bucket `resumes` at `{user_id}/{filename}` (filename stripped of any path), insert `resumes` row, return id  
+- **`user_id`:** the authenticated principal — Supabase user id for Bearer, `API_KEY_USER_ID` (default `00000000-0000-0000-0000-000000000000`) for API key
 
 **Response `200`:**
 
@@ -67,12 +66,12 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 { "resume_id": "<uuid>" }
 ```
 
-**Errors:** `401` unauthenticated; `400` missing/non-PDF (SHOULD validate); `413` too large (SHOULD); `500` storage/DB failure
+**Errors:** `401` unauthenticated; `422` no `file` field; `400` not a PDF; `413` larger than `MAX_UPLOAD_MB`; `500` storage/DB failure
 
 ### `POST /resume/parse/{resume_id}` — Protected
 
 - **Path param:** `resume_id` (uuid)  
-- **Behavior:** if already parsed, return existing `candidate_profiles` row; else download PDF, OpenAI parse, insert profile, mark parsed, Pinecone upsert
+- **Behavior:** if already parsed, return existing `candidate_profiles` row; else download PDF, OpenAI parse, embed, insert profile, Pinecone upsert, mark parsed (a parse/embed failure leaves the resume unparsed so it can be retried)
 
 **Response `200` — `CandidateProfileResponse`:**
 
@@ -93,7 +92,7 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 
 ---
 
-## 3. Search — wired today (`routes/search.py`, prefix `/search`)
+## 3. Search (`routes/search.py`, prefix `/search`)
 
 ### `GET /search/` — Protected
 
@@ -103,8 +102,8 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 
 | Param | Type | Default | Required |
 |---|---|---|---|
-| `q` | string | — | yes |
-| `k` | int | `5` | no |
+| `q` | string (non-empty) | — | yes |
+| `k` | int, 1–100 | `5` | no |
 
 **Response `200`:** array of `SearchResult`
 
@@ -122,13 +121,13 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 ]
 ```
 
-**Errors:** `401`; `500` with detail prefix `Pinecone error: …` (current behavior)
+**Errors:** `401`; `422` missing `q` or `k` out of range; `500` with detail prefix `Pinecone error: …`. Matches whose profile row no longer exists are skipped.
 
 ---
 
-## 4. Outreach — exists, not wired (`routes/outreach.py`, prefix `/outreach`)
+## 4. Outreach (`routes/outreach.py`, prefix `/outreach`)
 
-### `POST /outreach/` — Protected (wire in Phase 2)
+### `POST /outreach/` — Protected
 
 **Body:**
 
@@ -146,17 +145,15 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 { "status": "sent", "to": "candidate@email" }
 ```
 
-**Errors:** `404` candidate not found; `500` email send failed; `401`
-
-**Precondition to wire:** `from dependencies import get_current_user` (currently missing).
+**Errors:** `404` candidate not found; `500` `Email send failed` (SendGrid non-2xx or error; nothing is logged); `401`
 
 ---
 
-## 5. Profile — exists, not wired (`routes/profile.py`, prefix `/profile`)
+## 5. Profile (`routes/profile.py`, prefix `/profile`)
 
 ### `GET /profile/` — Protected
 
-- Loads `profiles` for `user["id"]`; creates blank row if missing (`PGRST116`)
+- Loads `profiles` for the principal id; creates a blank row (`id`, `email`) if missing
 
 **Response `200`:** profile row object (Supabase shape)
 
@@ -172,15 +169,15 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 }
 ```
 
-**Errors:** `400` no fields; `500` DB; `401`
+All fields optional; only fields sent are updated.
 
-**Precondition:** import `get_current_user`; remove triplicate `supabase` imports.
+**Errors:** `400` no fields; `404` no profile row yet (call `GET /profile/` first); `401`
 
 ---
 
-## 6. Background — exists, not wired (`routes/background.py`, prefix `/background`)
+## 6. Background (`routes/background.py`, prefix `/background`)
 
-### `POST /background/run/{candidate_id}` — Protected (COULD)
+### `POST /background/run/{candidate_id}` — Protected (stub)
 
 **Response `200`:**
 
@@ -191,16 +188,13 @@ FastAPI default is acceptable; do not invent a second envelope unless refactorin
 }
 ```
 
-Clearly document as **stub** in README/OpenAPI description.
+**Stub:** no vendor is called; always returns `passed` with a placeholder URL (documented in README and the OpenAPI description). `404` if the candidate does not exist.
 
 ---
 
 ## 7. Auth / analytics routers
 
-| File | Status | Contract action |
-|---|---|---|
-| `routes/auth.py` | Empty | Do **not** advertise paths until implemented. If implementing: document signup/login against Supabase Auth explicitly. |
-| `routes/analytics.py` | Empty | No public API until designed. Prefer service-level tracking from existing routes. |
+The empty `routes/auth.py` and `routes/analytics.py` stubs were **deleted** (see MIGRATION_NOTES §10). No auth or analytics paths are exposed: authentication is a dependency (`dependencies.require_auth`) applied to every router, and `services/analytics_service.track_event` stays an optional, no-op-without-key service helper.
 
 ---
 
@@ -218,8 +212,8 @@ Any new path requires PRD update + this file + tests.
 
 | Today | Target |
 |---|---|
-| FastAPI `title="Lovable AI MVP Backend"` | `Recruiter Talent Search API` (or similar) |
-| Tags | `resume`, `search`, add `outreach`, `profile`, `background`, `health` |
+| FastAPI `title="Lovable AI MVP Backend"` | `Recruiter Talent Search API` (done; override with `APP_TITLE`) |
+| Tags | `resume`, `search`, `outreach`, `profile`, `background`, `health` (done) |
 
 ---
 
